@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>3D Zombie Web Edition</title>
+    <title>3D Zombie Mobile Edition</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: Arial; }
-        #ui { position: absolute; top: 10px; left: 10px; color: #0f0; font-size: 20px; pointer-events: none; }
-        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; background: red; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
-        #msg { position: absolute; top: 30%; left: 50%; transform: translateX(-50%); color: red; font-size: 30px; display: none; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: Arial; touch-action: none; }
+        #ui { position: absolute; top: 10px; left: 10px; color: #0f0; font-size: 18px; pointer-events: none; text-shadow: 1px 1px #000; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; border: 2px solid red; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        #msg { position: absolute; top: 30%; left: 50%; transform: translateX(-50%); color: red; font-size: 24px; display: none; font-weight: bold; }
     </style>
 </head>
 <body>
     <div id="ui">KILLS: 0 | HP: 100</div>
     <div id="crosshair"></div>
-    <div id="msg">ZOMBIE ELIMINATED!</div>
+    <div id="msg">TARGET ELIMINATED!</div>
 
     <script type="importmap">
         { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
@@ -23,150 +23,120 @@
     <script type="module">
         import * as THREE from 'three';
 
-        // --- 1. 场景基础 ---
+        // --- 1. 初始化 ---
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x000000);
+        scene.background = new THREE.Color(0x050505);
+        scene.fog = new THREE.FogExp2(0x050505, 0.05);
+
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
         document.body.appendChild(renderer.domElement);
 
-        // 灯光
-        const light = new THREE.PointLight(0xffffff, 100, 100);
-        light.position.set(0, 10, 0);
+        const light = new THREE.PointLight(0xffffff, 50, 50);
+        light.position.set(0, 5, 0);
         scene.add(light);
-        scene.add(new THREE.AmbientLight(0x404040));
+        scene.add(new THREE.AmbientLight(0x202020));
 
-        // 地面 (对应 Ursina Plane)
-        const floorGeo = new THREE.PlaneGeometry(200, 200);
-        const floorMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
-        const floor = new THREE.Mesh(floorGeo, floorMat);
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0x111111 }));
         floor.rotation.x = -Math.PI / 2;
         scene.add(floor);
 
-        // --- 2. 玩家状态 ---
-        let health = 100;
-        let kills = 0;
-        camera.position.set(0, 1.6, 5); // 1.6米为人眼高度
-
-        // --- 3. 枪支模型 (屏幕右下角) ---
-        const gunGeo = new THREE.BoxGeometry(0.1, 0.1, 0.5);
-        const gunMat = new THREE.MeshStandardMaterial({ color: 0x000000 });
-        const gun = new THREE.Mesh(gunGeo, gunMat);
+        // --- 2. 玩家与武器 ---
+        let health = 100, kills = 0;
+        camera.position.set(0, 1.6, 5);
+        
+        const gun = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.4), new THREE.MeshStandardMaterial({ color: 0x222222 }));
         camera.add(gun);
-        gun.position.set(0.4, -0.3, -0.5); // 锁定在相机前面
+        gun.position.set(0.3, -0.25, -0.5);
         scene.add(camera);
 
-        // --- 4. 怪物管理 (对象池) ---
+        // --- 3. 怪物管理 ---
         const zombies = [];
         const zombieGeo = new THREE.BoxGeometry(1, 2, 1);
-        const zombieMat = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+        function spawnZombie(z) {
+            z.position.set(Math.random() * 40 - 20, 1, -(Math.random() * 30 + 10));
+            z.hp = 100; z.visible = true; z.active = true;
+        }
 
-        for (let i = 0; i < 8; i++) {
-            const z = new THREE.Mesh(zombieGeo, zombieMat);
-            z.hp = 100;
-            z.active = true;
+        for (let i = 0; i < 6; i++) {
+            const z = new THREE.Mesh(zombieGeo, new THREE.MeshStandardMaterial({ color: 0x00ff00 }));
             spawnZombie(z);
             scene.add(z);
             zombies.push(z);
         }
 
-        function spawnZombie(z) {
-            z.position.set(Math.random() * 60 - 30, 1, -(Math.random() * 40 + 20));
-            z.hp = 100;
-            z.visible = true;
-            z.active = true;
-        }
+        // --- 4. 手机触控逻辑 ---
+        let touchX = 0, touchY = 0, lon = 0, lat = 0;
+        let isMovingCamera = false;
 
-        // --- 5. 射击逻辑 ---
+        window.addEventListener('touchstart', (e) => {
+            isMovingCamera = true;
+            touchX = e.touches[0].clientX;
+            touchY = e.touches[0].clientY;
+            fire(); // 点击即开火
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            if (!isMovingCamera) return;
+            const deltaX = e.touches[0].clientX - touchX;
+            const deltaY = e.touches[0].clientY - touchY;
+            touchX = e.touches[0].clientX;
+            touchY = e.touches[0].clientY;
+
+            lon -= deltaX * 0.2; // 灵敏度
+            lat -= deltaY * 0.2;
+            lat = Math.max(-85, Math.min(85, lat));
+        });
+
+        // --- 5. 射击 ---
         const raycaster = new THREE.Raycaster();
-        const mouse = new THREE.Vector2(0, 0); // 始终对准屏幕中心
-
         function fire() {
-            // 射线从相机中心发出
-            raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects(zombies);
+            // 枪支后坐力
+            gun.position.z += 0.1;
+            setTimeout(() => gun.position.z = -0.5, 50);
 
-            if (intersects.length > 0) {
-                const target = intersects[0].object;
-                if (target.active) {
-                    target.hp -= 35;
-                    if (target.hp <= 0) {
-                        kills++;
-                        showMsg();
-                        target.active = false;
-                        target.visible = false;
-                        setTimeout(() => spawnZombie(target), 1000);
-                    }
+            raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+            const hits = raycaster.intersectObjects(zombies);
+            if (hits.length > 0) {
+                const target = hits[0].object;
+                target.hp -= 40;
+                target.material.color.set(0xff0000);
+                setTimeout(() => target.material.color.set(0x00ff00), 100);
+                if (target.hp <= 0) {
+                    kills++;
+                    target.active = false; target.visible = false;
+                    document.getElementById('msg').style.display = 'block';
+                    setTimeout(() => { document.getElementById('msg').style.display = 'none'; spawnZombie(target); }, 500);
                 }
             }
         }
 
-        function showMsg() {
-            const el = document.getElementById('msg');
-            el.style.display = 'block';
-            setTimeout(() => { el.style.display = 'none'; }, 500);
-        }
-
-        // --- 6. 交互控制 ---
-        // 手机触摸或鼠标点击射击
-        window.addEventListener('pointerdown', () => {
-            if (document.pointerLockElement || isTouchDevice()) {
-                fire();
-            } else {
-                document.body.requestPointerLock();
-            }
-        });
-
-        function isTouchDevice() { return 'ontouchstart' in window; }
-
-        // 简单的手机陀螺仪或滑动旋转（此处简化为鼠标锁定旋转）
-        let pitch = 0, yaw = 0;
-        window.addEventListener('mousemove', (e) => {
-            if (document.pointerLockElement) {
-                yaw -= e.movementX * 0.002;
-                pitch -= e.movementY * 0.002;
-                pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
-                camera.rotation.set(pitch, yaw, 0, 'YXZ');
-            }
-        });
-
-        // --- 7. 游戏主循环 (Update) ---
+        // --- 6. 循环 ---
         function animate() {
             requestAnimationFrame(animate);
 
+            // 更新视角
+            const phi = THREE.MathUtils.degToRad(90 - lat);
+            const theta = THREE.MathUtils.degToRad(lon);
+            const target = new THREE.Vector3();
+            target.setFromSphericalCoords(1, phi, theta).add(camera.position);
+            camera.lookAt(target);
+
             zombies.forEach(z => {
                 if (z.active) {
-                    // 怪物向玩家移动
-                    const dir = new THREE.Vector3();
-                    dir.subVectors(camera.position, z.position).normalize();
-                    z.position.x += dir.x * 0.05;
-                    z.position.z += dir.z * 0.05;
-
-                    // 距离检测
-                    if (z.position.distanceTo(camera.position) < 1.5) {
-                        health -= 0.1;
-                    }
+                    const dir = new THREE.Vector3().subVectors(camera.position, z.position).normalize();
+                    z.position.x += dir.x * 0.03;
+                    z.position.z += dir.z * 0.03;
+                    if (z.position.distanceTo(camera.position) < 2) health -= 0.2;
                 }
             });
 
             document.getElementById('ui').innerText = `KILLS: ${kills} | HP: ${Math.ceil(health)}`;
-            
-            if (health <= 0) {
-                document.getElementById('ui').innerText = "GAME OVER";
-                return;
-            }
-
+            if (health <= 0) { alert("YOU DIED!"); location.reload(); }
             renderer.render(scene, camera);
         }
-
-        // 窗口大小适配
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-
         animate();
     </script>
 </body>
